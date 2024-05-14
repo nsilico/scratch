@@ -2,12 +2,7 @@ import torch
 from transformers import BertTokenizer, BertModel
 import torch.multiprocessing as mp
 import time
-import logging
 from typing import List, Tuple
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Configuration dictionary
 config = {
@@ -22,7 +17,7 @@ def init_model(gpu_id: int) -> BertModel:
         model = BertModel.from_pretrained('bert-base-uncased').to(f"cuda:{gpu_id}").eval()
         return model
     except Exception as e:
-        logger.error(f"Failed to initialize model on GPU {gpu_id}: {e}")
+        print(f"Failed to initialize model on GPU {gpu_id}: {e}")
         raise
 
 def process_inputs(batch: List[str], gpu_id: int, model: BertModel) -> Tuple[int, List[float]]:
@@ -60,7 +55,7 @@ def gpu_worker(gpu_id: int, input_batches: List[List[str]], result_queue: mp.Que
         
         result_queue.put((total_output_tokens, example_outputs))
     except Exception as e:
-        logger.error(f"Error in GPU worker {gpu_id}: {e}")
+        print(f"Error in GPU worker {gpu_id}: {e}")
 
 def main():
     """Main function to execute multiprocessing workload."""
@@ -95,10 +90,10 @@ def main():
     total_time = end_time - start_time
     throughput = total_output_tokens / total_time
     
-    logger.info(f"Total time taken: {total_time:.2f} seconds")
-    logger.info(f"Throughput: {throughput:.2f} tokens per second")
-    logger.info(f"Total output tokens: {total_output_tokens}")
-    logger.info(f"Example outputs: {example_outputs}")
+    print(f"Total time taken: {total_time:.2f} seconds")
+    print(f"Throughput: {throughput:.2f} tokens per second")
+    print(f"Total output tokens: {total_output_tokens}")
+    print(f"Example outputs: {example_outputs}")
 
 if __name__ == "__main__":
     # Ensure the multiprocessing context is set correctly
