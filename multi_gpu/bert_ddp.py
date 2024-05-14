@@ -1,7 +1,6 @@
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import BertTokenizer, BertModel
 import time
@@ -86,4 +85,4 @@ def main(rank: int, world_size: int):
 
 if __name__ == "__main__":
     world_size = torch.cuda.device_count()
-    torch.multiprocessing.spawn(main, args=(world_size,), nprocs=world_size, join=True)
+    mp.spawn(main, args=(world_size,), nprocs=world_size, join=True)
