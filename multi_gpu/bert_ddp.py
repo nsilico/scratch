@@ -1,16 +1,50 @@
-import os
 import torch
 import torch.distributed as dist
+import torch.nn as nn
+from torch.nn.parallel import DistributedDataParallel as DDP
+from transformers import BertTokenizer, BertModel
+import time
+import os
+from typing import List, Tuple
+
+# Configuration dictionary
+config = {
+    "batch_size": 500,
+    "num_batches": 64,
+    "sentence": "This is a test sentence. " * 50,
+}
 
 def setup(rank: int, world_size: int):
+    print(f"[Rank {rank}] Setting up process group...")
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     print(f"[Rank {rank}] Process group initialized.")
 
 def cleanup():
+    print(f"[Rank {rank}] Cleaning up process group...")
     dist.destroy_process_group()
     print(f"[Rank {rank}] Process group cleaned up.")
+
+def init_model() -> BertModel:
+    """Initialize the BERT model."""
+    print(f"[Rank {rank}] Initializing BERT model...")
+    model = BertModel.from_pretrained('bert-base-uncased')
+    print(f"[Rank {rank}] BERT model initialized.")
+    return model
+
+def process_inputs(batch: List[str], model: nn.Module, device: torch.device) -> Tuple[int, List[float]]:
+    """Process a batch of inputs on a specific GPU."""
+    print(f"[Rank {rank}] Tokenizing batch...")
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    encoded_inputs = tokenizer(batch, padding=True, truncation=True, max_length=512, return_tensors="pt").to(device)
+    print(f"[Rank {rank}] Tokenization complete. Running model...")
+    with torch.no_grad():
+        outputs = model(**encoded_inputs)
+    print(f"[Rank {rank}] Model run complete.")
+    output_tokens = outputs.last_hidden_state.size(0) * outputs.last_hidden_state.size(1)
+    example_output = outputs.last_hidden_state[0][0][:5].cpu().numpy().tolist()
+    return (output_tokens, example_output)
 
 def main():
     rank_env = os.getenv('RANK')
@@ -24,14 +58,32 @@ def main():
     
     setup(rank, world_size)
     
-    # Create a tensor and perform a collective operation
-    tensor = torch.ones(1).cuda(rank)
-    print(f"[Rank {rank}] Before all_reduce: {tensor}")
-    
-    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
-    print(f"[Rank {rank}] After all_reduce: {tensor}")
-    
-    cleanup()
+    device = torch.device(f'cuda:{rank}')
+    print(f"[Rank {rank}] Using device: {device}")
 
-if __name__ == "__main__":
-    main()
+    model = init_model().to(device)
+    model = DDP(model, device_ids=[rank])
+    print(f"[Rank {rank}] Model wrapped with DDP.")
+
+    input_batches = [[config["sentence"]] * config["batch_size"] for _ in range(config["num_batches"])]
+    split_batches = [input_batches[i::world_size] for i in range(world_size)]
+    local_batches = split_batches[rank]
+    
+    print(f"[Rank {rank}] Starting processing {len(local_batches)} batches.")
+    
+    total_output_tokens = 0
+    example_outputs = []
+    start_time = time.time()
+
+    try:
+        for i, batch in enumerate(local_batches):
+            print(f"[Rank {rank}] Processing batch {i+1}/{len(local_batches)}...")
+            output_tokens, example_output = process_inputs(batch, model, device)
+            total_output_tokens += output_tokens
+            example_outputs.append(example_output)
+            print(f"[Rank {rank}] Finished batch {i+1}/{len(local_batches)}. Total output tokens so far: {total_output_tokens}")
+
+        total_time = time.time() - start_time
+        print(f"[Rank {rank}] All batches processed. Reducing total output tokens.")
+        total_output_tokens_tensor = torch.tensor(total_output_tokens, device=device)
+        dist.reduce(total_output_tokens_tensor, dst=0, op=dist
