@@ -1,37 +1,37 @@
+import os
 import torch
 import torch.distributed as dist
-import torch.nn as nn
-from torch.nn.parallel import DistributedDataParallel as DDP
-from transformers import BertTokenizer, BertModel
-import time
-import os
-from typing import List, Tuple
-
-# Configuration dictionary
-config = {
-    "batch_size": 500,
-    "num_batches": 64,
-    "sentence": "This is a test sentence. " * 50,
-}
 
 def setup(rank: int, world_size: int):
-    print(f"[Rank {rank}] Setting up process group...")
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     print(f"[Rank {rank}] Process group initialized.")
 
 def cleanup():
-    print("Cleaning up process group...")
     dist.destroy_process_group()
-    print("Process group cleaned up.")
+    print(f"[Rank {rank}] Process group cleaned up.")
 
-def init_model() -> BertModel:
-    """Initialize the BERT model."""
-    print("Initializing BERT model...")
-    model = BertModel.from_pretrained('bert-base-uncased')
-    print("BERT model initialized.")
-    return model
+def main():
+    rank_env = os.getenv('RANK')
+    world_size_env = os.getenv('WORLD_SIZE')
+    
+    if rank_env is None or world_size_env is None:
+        raise ValueError("RANK and WORLD_SIZE environment variables must be set")
+    
+    rank = int(rank_env)
+    world_size = int(world_size_env)
+    
+    setup(rank, world_size)
+    
+    # Create a tensor and perform a collective operation
+    tensor = torch.ones(1).cuda(rank)
+    print(f"[Rank {rank}] Before all_reduce: {tensor}")
+    
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    print(f"[Rank {rank}] After all_reduce: {tensor}")
+    
+    cleanup()
 
-def process_inputs(batch: List[str], model: nn.Module, device: torch.device) -> Tuple[int, List[float]]:
-    """Proc
+if __name__ == "__main__":
+    main()
