@@ -17,23 +17,23 @@ config = {
 def setup(rank: int, world_size: int):
     print(f"[Rank {rank}] Setting up process group...")
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
+    os.environ['MASTER_PORT'] = '29500'  # CHANGED: Updated port to 29500
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     print(f"[Rank {rank}] Process group initialized.")
 
-def cleanup():
+def cleanup(rank: int):
     print(f"[Rank {rank}] Cleaning up process group...")
     dist.destroy_process_group()
     print(f"[Rank {rank}] Process group cleaned up.")
 
-def init_model() -> BertModel:
+def init_model(rank: int) -> BertModel:
     """Initialize the BERT model."""
     print(f"[Rank {rank}] Initializing BERT model...")
     model = BertModel.from_pretrained('bert-base-uncased')
     print(f"[Rank {rank}] BERT model initialized.")
     return model
 
-def process_inputs(batch: List[str], model: nn.Module, device: torch.device) -> Tuple[int, List[float]]:
+def process_inputs(batch: List[str], model: nn.Module, device: torch.device, rank: int) -> Tuple[int, List[float]]:
     """Process a batch of inputs on a specific GPU."""
     print(f"[Rank {rank}] Tokenizing batch...")
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -61,7 +61,7 @@ def main():
     device = torch.device(f'cuda:{rank}')
     print(f"[Rank {rank}] Using device: {device}")
 
-    model = init_model().to(device)
+    model = init_model(rank).to(device)
     model = DDP(model, device_ids=[rank])
     print(f"[Rank {rank}] Model wrapped with DDP.")
 
@@ -78,7 +78,7 @@ def main():
     try:
         for i, batch in enumerate(local_batches):
             print(f"[Rank {rank}] Processing batch {i+1}/{len(local_batches)}...")
-            output_tokens, example_output = process_inputs(batch, model, device)
+            output_tokens, example_output = process_inputs(batch, model, device, rank)
             total_output_tokens += output_tokens
             example_outputs.append(example_output)
             print(f"[Rank {rank}] Finished batch {i+1}/{len(local_batches)}. Total output tokens so far: {total_output_tokens}")
@@ -86,4 +86,17 @@ def main():
         total_time = time.time() - start_time
         print(f"[Rank {rank}] All batches processed. Reducing total output tokens.")
         total_output_tokens_tensor = torch.tensor(total_output_tokens, device=device)
-        dist.reduce(total_output_tokens_tensor, dst=0, op=dist
+        dist.reduce(total_output_tokens_tensor, dst=0, op=dist.ReduceOp.SUM)
+        print(f"[Rank {rank}] Reduction completed.")
+
+        if rank == 0:
+            throughput = total_output_tokens_tensor.item() / total_time
+            print(f"Total time taken: {total_time:.2f} seconds")
+            print(f"Throughput: {throughput:.2f} tokens per second")
+            print(f"Total output tokens: {total_output_tokens_tensor.item()}")
+            print(f"Example outputs: {example_outputs}")
+    finally:
+        cleanup(rank)
+
+if __name__ == "__main__":
+    main()
