@@ -85,4 +85,5 @@ def main(rank: int, world_size: int):
 
 if __name__ == "__main__":
     world_size = torch.cuda.device_count()
-    mp.spawn(main, args=(world_size,), nprocs=world_size, join=True)
+    dist.init_process_group("nccl", init_method='env://', rank=0, world_size=world_size)
+    main(0, world_size)
