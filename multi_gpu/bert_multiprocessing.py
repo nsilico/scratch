@@ -46,7 +46,7 @@ def process_inputs(batch: List[str], gpu_id: int, model: BertModel) -> Tuple[int
     
     return (output_tokens, example_output)
 
-def gpu_worker(gpu_id: int, input_batches: List[List[str]], result_list: mp.Manager().list):
+def gpu_worker(gpu_id: int, input_batches: List[List[str]], result_queue: mp.Queue):
     """Worker function to process batches on a given GPU."""
     try:
         model = init_model(gpu_id)
@@ -58,7 +58,7 @@ def gpu_worker(gpu_id: int, input_batches: List[List[str]], result_list: mp.Mana
             total_output_tokens += output_tokens
             example_outputs.append(example_output)
         
-        result_list.append((total_output_tokens, example_outputs))
+        result_queue.put((total_output_tokens, example_outputs))
     except Exception as e:
         logger.error(f"Error in GPU worker {gpu_id}: {e}")
 
@@ -70,13 +70,13 @@ def main():
     split_batches = [input_batches[i::num_gpus] for i in range(num_gpus)]
     
     manager = mp.Manager()
-    result_list = manager.list()
+    result_queue = manager.Queue()
     
     processes = []
     start_time = time.time()
     
     for gpu_id in range(num_gpus):
-        p = mp.Process(target=gpu_worker, args=(gpu_id, split_batches[gpu_id], result_list))
+        p = mp.Process(target=gpu_worker, args=(gpu_id, split_batches[gpu_id], result_queue))
         p.start()
         processes.append(p)
     
@@ -85,8 +85,12 @@ def main():
     
     end_time = time.time()
     
-    total_output_tokens = sum(result[0] for result in result_list)
-    example_outputs = [output for result in result_list for output in result[1]]
+    total_output_tokens = 0
+    example_outputs = []
+    while not result_queue.empty():
+        output_tokens, example_output = result_queue.get()
+        total_output_tokens += output_tokens
+        example_outputs.extend(example_output)
     
     total_time = end_time - start_time
     throughput = total_output_tokens / total_time
@@ -97,5 +101,9 @@ def main():
     logger.info(f"Example outputs: {example_outputs}")
 
 if __name__ == "__main__":
-    mp.set_start_method('spawn')
+    # Ensure the multiprocessing context is set correctly
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
     main()
