@@ -6,7 +6,7 @@ import torch
 
 # Load the pipeline with device_map for SDXL
 pipeline = StableDiffusionXLPipeline.from_pretrained(
-    "stabilityai/stable-diffusion-xl", 
+    "stabilityai/stable-diffusion-xl-base-1.0", 
     torch_dtype=torch.float16, 
     device_map="balanced"
 )
