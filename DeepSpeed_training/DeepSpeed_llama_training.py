@@ -120,16 +120,24 @@ training_args = TrainingArguments(
 # Custom Trainer
 class TokenSpeedTrainer(Trainer):
     def train(self, **kwargs):
-        # Start training using Hugging Face's Trainer implementation
+        # Start timing
         start_time = time.time()
-        output = super().train(**kwargs)
+        super().train(**kwargs)  # Use Hugging Face's Trainer train method
         end_time = time.time()
 
         # Calculate throughput
         elapsed_time = end_time - start_time
-        total_tokens = len(self.train_dataset) * self.args.per_device_train_batch_size
-        tokens_per_second = total_tokens / elapsed_time
-        print(f"Training tokens per GPU per second: {tokens_per_second}")
+        total_samples = len(self.train_dataset)  # Total samples in dataset
+        sequence_length = 4096  # Match sequence length in the script
+        batch_size = self.args.per_device_train_batch_size
+        num_gpus = torch.cuda.device_count()  # Automatically detect GPUs
+
+        # Total tokens processed
+        total_tokens = total_samples * sequence_length * batch_size
+
+        # Tokens per GPU per second
+        tokens_per_second = total_tokens / (elapsed_time * num_gpus)
+        print(f"Training tokens per GPU per second: {tokens_per_second:.2f}")
         return tokens_per_second
 
 
