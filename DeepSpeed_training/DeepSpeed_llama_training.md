@@ -95,10 +95,15 @@ dataset = RandomTextDataset(tokenizer, num_samples=num_samples)
 
 # Define data collator with proper pinning and device placement
 def collate_fn_with_device(batch, device):
-    # Pin tensors while they are still on the CPU
-    collated_batch = {key: torch.stack([example[key] for example in batch]).pin_memory() for key in batch[0]}
+    # Ensure tensors are on the CPU for pinning
+    collated_batch = {key: torch.stack([example[key] for example in batch]) for key in batch[0]}
+    
+    # Pin memory only for CPU tensors
+    collated_batch = {key: value.pin_memory() if value.device.type == "cpu" else value for key, value in collated_batch.items()}
+    
     # Move tensors to the specified device after pinning
     collated_batch = {key: value.to(device, non_blocking=True) for key, value in collated_batch.items()}
+    
     return collated_batch
 
 # Wrap DataCollator to ensure compatibility with DeepSpeed
