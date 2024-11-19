@@ -93,21 +93,17 @@ num_samples = 1000
 batch_size = 1
 dataset = RandomTextDataset(tokenizer, num_samples=num_samples)
 
-# Define data collator with proper pinning and device placement
+# Define data collator without pinning
 def collate_fn_with_device(batch, device):
-    # Ensure tensors are on the CPU for pinning
-    collated_batch = {key: torch.stack([example[key] for example in batch]) for key in batch[0]}
-    
-    # Pin memory only for CPU tensors
-    collated_batch = {key: value.pin_memory() if value.device.type == "cpu" else value for key, value in collated_batch.items()}
-    
-    # Move tensors to the specified device after pinning
-    collated_batch = {key: value.to(device, non_blocking=True) for key, value in collated_batch.items()}
-    
+    collated_batch = {key: torch.stack([example[key] for example in batch]).to(device, non_blocking=True) for key in batch[0]}
     return collated_batch
 
-# Wrap DataCollator to ensure compatibility with DeepSpeed
-data_collator = lambda batch: collate_fn_with_device(batch, device)
+# Custom DataLoader
+data_loader = DataLoader(
+    dataset,
+    batch_size=batch_size,
+    collate_fn=lambda batch: collate_fn_with_device(batch, device),
+)
 
 # Define DeepSpeed configuration
 training_args = TrainingArguments(
@@ -128,7 +124,10 @@ class TokenSpeedTrainer(Trainer):
         for step, batch in enumerate(self.get_train_dataloader()):
             # Debug tensor devices
             for key, value in batch.items():
-                print(f"{key}: {value.device}")  # Debugging device mismatch
+                print(f"[DEBUG] Batch key: {key}, Device: {value.device}, Tensor type: {value.type()}")
+            
+            # Ensure tensors are on the correct device before training step
+            batch = {key: value.to(self.model.device, non_blocking=True) for key, value in batch.items()}
             
             # Perform a training step
             outputs = self.training_step(self.model, batch)
@@ -153,7 +152,8 @@ trainer = TokenSpeedTrainer(
     args=training_args,
     train_dataset=dataset,
     tokenizer=tokenizer,
-    data_collator=data_collator
+    data_collator=None,  # Disable default collator
+    train_dataloader=data_loader  # Use custom DataLoader
 )
 
 # Run training and calculate throughput
