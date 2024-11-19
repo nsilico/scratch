@@ -54,8 +54,14 @@ from deepspeed import init_distributed
 from torch.utils.data import DataLoader, Dataset
 from transformers import TrainingArguments, Trainer
 
+
 # Initialize distributed setup for DeepSpeed
 init_distributed()
+
+# Determine the current rank and assign the corresponding GPU
+rank = torch.distributed.get_rank()
+device = torch.device(f"cuda:{rank}")
+torch.cuda.set_device(device)
 
 # Load model and tokenizer
 model_name = "meta-llama/Llama-2-7b-hf"
@@ -66,6 +72,7 @@ tokenizer.pad_token = tokenizer.eos_token
 
 # Load model and set pad_token_id
 model = AutoModelForCausalLM.from_pretrained(model_name)
+model.to(device)  # Explicitly move the model to the correct device
 if model.config.pad_token_id is None:
     model.config.pad_token_id = tokenizer.pad_token_id
 
@@ -86,19 +93,17 @@ class RandomTextDataset(Dataset):
         return {"input_ids": self.input_ids[idx], "labels": self.input_ids[idx]}
 
 
-# Create dataset and DataLoader
+# Create dataset
 num_samples = 1000
 batch_size = 1
 dataset = RandomTextDataset(tokenizer, num_samples=num_samples)
 
-# Define data collator for padding
-data_collator = DataCollatorForSeq2Seq(
-    tokenizer=tokenizer,
-    model=model,
-    padding=True,
-    max_length=sequence_length,
-    return_tensors="pt"
-)
+# Define data collator with explicit device placement
+def collate_fn_with_device(batch, device):
+    return {key: torch.tensor(value).to(device) for key, value in batch.items()}
+
+# Wrap DataCollator to ensure compatibility with DeepSpeed
+data_collator = lambda batch: collate_fn_with_device(batch, device)
 
 # Define DeepSpeed configuration
 training_args = TrainingArguments(
@@ -117,13 +122,23 @@ class TokenSpeedTrainer(Trainer):
         start_time = time.time()
         total_tokens = 0
         for step, batch in enumerate(self.get_train_dataloader()):
-            # Move batch to the model's device
+            # Debug tensor devices
+            for key, value in batch.items():
+                print(f"{key}: {value.device}")  # Debugging device mismatch
+            
+            # Move all tensors in the batch to the model's device
             batch = {key: value.to(self.model.device) for key, value in batch.items()}
+            
+            # Perform a training step
             outputs = self.training_step(self.model, batch)
+            
+            # Optimizer and scheduler step
             self.optimizer.step()
             self.lr_scheduler.step()
             self.optimizer.zero_grad()
-            total_tokens += batch["input_ids"].numel()  # Count tokens
+            
+            # Count tokens
+            total_tokens += batch["input_ids"].numel()
         end_time = time.time()
         elapsed_time = end_time - start_time
         tokens_per_second = total_tokens / elapsed_time
