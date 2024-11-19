@@ -12,23 +12,23 @@ def create_deepspeed_config():
         "train_micro_batch_size_per_gpu": "auto",  # Let Hugging Face set this
         "gradient_accumulation_steps": "auto",  # Let Hugging Face set this
         "fp16": {
-            "enabled": True
+            "enabled": "auto"  # Let Hugging Face set this
         },
         "optimizer": {
             "type": "AdamW",
             "params": {
-                "lr": 1e-5,
+                "lr": "auto",  # Let Hugging Face set this
                 "betas": [0.9, 0.999],
                 "eps": 1e-8,
-                "weight_decay": 1e-2
+                "weight_decay": "auto"  # Let Hugging Face set this
             }
         },
         "scheduler": {
             "type": "WarmupLR",
             "params": {
                 "warmup_min_lr": 0,
-                "warmup_max_lr": 1e-5,
-                "warmup_num_steps": 100
+                "warmup_max_lr": "auto",  # Let Hugging Face set this
+                "warmup_num_steps": "auto"  # Let Hugging Face set this
             }
         },
         "zero_optimization": {
