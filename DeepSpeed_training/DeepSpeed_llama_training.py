@@ -9,26 +9,26 @@ from transformers import TrainingArguments, Trainer
 # Generate DeepSpeed configuration
 def create_deepspeed_config():
     ds_config = {
-        "train_micro_batch_size_per_gpu": "auto",  # Let Hugging Face set this
-        "gradient_accumulation_steps": "auto",  # Let Hugging Face set this
+        "train_micro_batch_size_per_gpu": "auto",  # Automatically determined
+        "gradient_accumulation_steps": "auto",  # Automatically determined
         "fp16": {
-            "enabled": "auto"  # Let Hugging Face set this
+            "enabled": "auto"  # Automatically determined
         },
         "optimizer": {
             "type": "AdamW",
             "params": {
-                "lr": "auto",  # Let Hugging Face set this
+                "lr": "auto",  # Automatically determined
                 "betas": [0.9, 0.999],
                 "eps": 1e-8,
-                "weight_decay": "auto"  # Let Hugging Face set this
+                "weight_decay": "auto"  # Automatically determined
             }
         },
         "scheduler": {
             "type": "WarmupLR",
             "params": {
                 "warmup_min_lr": 0,
-                "warmup_max_lr": "auto",  # Let Hugging Face set this
-                "warmup_num_steps": "auto"  # Let Hugging Face set this
+                "warmup_max_lr": "auto",  # Automatically determined
+                "warmup_num_steps": "auto"  # Automatically determined
             }
         },
         "zero_optimization": {
