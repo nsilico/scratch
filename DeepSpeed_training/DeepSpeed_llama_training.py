@@ -120,9 +120,9 @@ training_args = TrainingArguments(
 # Custom Trainer
 class TokenSpeedTrainer(Trainer):
     def train(self, **kwargs):
-        # Start training
+        # Start training using Hugging Face's Trainer implementation
         start_time = time.time()
-        output = super().train(**kwargs)  # Use Trainer's train method
+        output = super().train(**kwargs)
         end_time = time.time()
 
         # Calculate throughput
