@@ -9,8 +9,8 @@ from transformers import TrainingArguments, Trainer
 # Generate DeepSpeed configuration
 def create_deepspeed_config():
     ds_config = {
-        "train_micro_batch_size_per_gpu": 1,
-        "gradient_accumulation_steps": 1,
+        "train_micro_batch_size_per_gpu": "auto",  # Let Hugging Face set this
+        "gradient_accumulation_steps": "auto",  # Let Hugging Face set this
         "fp16": {
             "enabled": True
         },
