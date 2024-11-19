@@ -117,6 +117,8 @@ class TokenSpeedTrainer(Trainer):
         start_time = time.time()
         total_tokens = 0
         for step, batch in enumerate(self.get_train_dataloader()):
+            # Move batch to the model's device
+            batch = {key: value.to(self.model.device) for key, value in batch.items()}
             outputs = self.training_step(self.model, batch)
             self.optimizer.step()
             self.lr_scheduler.step()
