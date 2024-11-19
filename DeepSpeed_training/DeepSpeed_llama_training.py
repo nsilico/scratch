@@ -1,9 +1,43 @@
 import time
+import json
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from deepspeed import init_distributed
 from torch.utils.data import DataLoader, Dataset
 from transformers import TrainingArguments, Trainer
+
+# Generate DeepSpeed configuration
+def create_deepspeed_config():
+    ds_config = {
+        "train_micro_batch_size_per_gpu": 1,
+        "gradient_accumulation_steps": 1,
+        "fp16": {
+            "enabled": True
+        },
+        "optimizer": {
+            "type": "AdamW",
+            "params": {
+                "lr": 1e-5,
+                "betas": [0.9, 0.999],
+                "eps": 1e-8,
+                "weight_decay": 1e-2
+            }
+        },
+        "scheduler": {
+            "type": "WarmupLR",
+            "params": {
+                "warmup_min_lr": 0,
+                "warmup_max_lr": 1e-5,
+                "warmup_num_steps": 100
+            }
+        }
+    }
+    with open("ds_config.json", "w") as f:
+        json.dump(ds_config, f, indent=4)
+    print("DeepSpeed config file created as 'ds_config.json'.")
+
+# Create DeepSpeed config
+create_deepspeed_config()
 
 # Initialize distributed setup for DeepSpeed
 init_distributed()
@@ -71,7 +105,7 @@ training_args = TrainingArguments(
     deepspeed="./ds_config.json",
 )
 
-# Custom Trainer to track tokens per second
+# Custom Trainer
 class TokenSpeedTrainer(Trainer):
     def __init__(self, *args, custom_data_loader=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -85,20 +119,12 @@ class TokenSpeedTrainer(Trainer):
     def training_step(self, model, batch):
         """Override the training step to ensure it returns a valid loss."""
         model.train()
-        
-        # Forward pass
         outputs = model(**batch)
-
-        # Debug outputs
         if outputs is None:
-            raise ValueError("Model did not return any outputs. Check the forward pass.")
-        print(f"[DEBUG] Model outputs: {outputs}")
-
-        # Extract loss
+            raise ValueError("Model did not return any outputs.")
         loss = outputs.loss
         if loss is None:
-            raise ValueError("Loss is None. Ensure `labels` are provided and the model can compute a loss.")
-        
+            raise ValueError("Loss is None. Ensure `labels` are provided.")
         print(f"[DEBUG] Loss at step: {loss}")
         return loss
 
@@ -106,29 +132,14 @@ class TokenSpeedTrainer(Trainer):
         start_time = time.time()
         total_tokens = 0
         for step, batch in enumerate(self.get_train_dataloader()):
-            # Debug tensor devices
             for key, value in batch.items():
                 print(f"[DEBUG] Batch key: {key}, Device: {value.device}, Tensor type: {value.type()}")
-
-            # Ensure tensors are on the correct device before training step
             batch = {key: value.to(self.model.device, non_blocking=True) for key, value in batch.items()}
-
-            # Perform a training step and get loss
             loss = self.training_step(self.model, batch)
             if loss is None:
-                raise ValueError("Training step did not return a loss tensor. Please check the model and data flow.")
-
-            # Backpropagation
-            loss.backward()
-
-            # Optimizer and scheduler step
-            self.optimizer.step()
-            self.lr_scheduler.step()
-            self.optimizer.zero_grad()
-
-            # Count tokens
+                raise ValueError("Training step did not return a loss tensor.")
+            self.deepspeed.step()
             total_tokens += batch["input_ids"].numel()
-
         end_time = time.time()
         elapsed_time = end_time - start_time
         tokens_per_second = total_tokens / elapsed_time
