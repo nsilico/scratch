@@ -30,6 +30,18 @@ def create_deepspeed_config():
                 "warmup_max_lr": 1e-5,
                 "warmup_num_steps": 100
             }
+        },
+        "zero_optimization": {
+            "stage": 2,
+            "offload_optimizer": {
+                "device": "none"
+            },
+            "offload_param": {
+                "device": "none"
+            },
+            "overlap_comm": True,
+            "reduce_scatter": True,
+            "contiguous_gradients": True
         }
     }
     with open("ds_config.json", "w") as f:
