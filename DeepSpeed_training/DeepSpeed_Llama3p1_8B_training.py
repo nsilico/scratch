@@ -60,7 +60,7 @@ device = torch.device(f"cuda:{rank}")
 torch.cuda.set_device(device)
 
 # Load model and tokenizer
-model_name = "meta-llama/Llama-3.1-8b-hf"  # Updated for Llama3.1 8B
+model_name = "meta-llama/Llama-3.1-8B"  # Updated for Llama3.1 8B
 tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
 
 # Assign a padding token (use eos_token as pad_token)
