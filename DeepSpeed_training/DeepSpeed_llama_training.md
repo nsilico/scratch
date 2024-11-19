@@ -100,7 +100,66 @@ dataset = RandomTextDataset(tokenizer, num_samples=num_samples)
 
 # Define data collator with explicit device placement
 def collate_fn_with_device(batch, device):
-    # Convert a batch (list of dicts) to a single dict with all
+    # Convert a batch (list of dicts) to a single dict with all tensors on the target device
+    collated_batch = {key: torch.stack([example[key] for example in batch]).to(device) for key in batch[0]}
+    return collated_batch
+
+# Wrap DataCollator to ensure compatibility with DeepSpeed
+data_collator = lambda batch: collate_fn_with_device(batch, device)
+
+# Define DeepSpeed configuration
+training_args = TrainingArguments(
+    output_dir="./output",
+    overwrite_output_dir=True,
+    per_device_train_batch_size=batch_size,
+    num_train_epochs=1,
+    logging_steps=10,
+    save_steps=50,
+    deepspeed="./ds_config.json",
+)
+
+# Custom Trainer to track tokens per second
+class TokenSpeedTrainer(Trainer):
+    def train(self, **kwargs):
+        start_time = time.time()
+        total_tokens = 0
+        for step, batch in enumerate(self.get_train_dataloader()):
+            # Debug tensor devices
+            for key, value in batch.items():
+                print(f"{key}: {value.device}")  # Debugging device mismatch
+            
+            # Move all tensors in the batch to the model's device
+            batch = {key: value.to(self.model.device) for key, value in batch.items()}
+            
+            # Perform a training step
+            outputs = self.training_step(self.model, batch)
+            
+            # Optimizer and scheduler step
+            self.optimizer.step()
+            self.lr_scheduler.step()
+            self.optimizer.zero_grad()
+            
+            # Count tokens
+            total_tokens += batch["input_ids"].numel()
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        tokens_per_second = total_tokens / elapsed_time
+        print(f"Training tokens per GPU per second: {tokens_per_second}")
+        return tokens_per_second
+
+
+# Instantiate trainer
+trainer = TokenSpeedTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    tokenizer=tokenizer,
+    data_collator=data_collator
+)
+
+# Run training and calculate throughput
+tokens_per_second = trainer.train()
+print(f"Figure of merit: {tokens_per_second:.2f} tokens/second per GPU")
 ```
 
 ```bash
