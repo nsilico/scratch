@@ -152,3 +152,10 @@ tokens_per_second = trainer.train()
 print(f"Figure of merit: {tokens_per_second:.2f} tokens/second per GPU")
 ```
 
+```bash
+# Run
+deepspeed --num_gpus=8 train_llama2.py
+```
+
+
+
