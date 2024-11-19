@@ -119,41 +119,15 @@ training_args = TrainingArguments(
 
 # Custom Trainer
 class TokenSpeedTrainer(Trainer):
-    def __init__(self, *args, custom_data_loader=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.custom_data_loader = custom_data_loader
-
-    def get_train_dataloader(self):
-        if self.custom_data_loader:
-            return self.custom_data_loader
-        return super().get_train_dataloader()
-
-    def training_step(self, model, batch):
-        """Override the training step to ensure it returns a valid loss."""
-        model.train()
-        outputs = model(**batch)
-        if outputs is None:
-            raise ValueError("Model did not return any outputs.")
-        loss = outputs.loss
-        if loss is None:
-            raise ValueError("Loss is None. Ensure `labels` are provided.")
-        print(f"[DEBUG] Loss at step: {loss}")
-        return loss
-
     def train(self, **kwargs):
+        # Start training
         start_time = time.time()
-        total_tokens = 0
-        for step, batch in enumerate(self.get_train_dataloader()):
-            for key, value in batch.items():
-                print(f"[DEBUG] Batch key: {key}, Device: {value.device}, Tensor type: {value.type()}")
-            batch = {key: value.to(self.model.device, non_blocking=True) for key, value in batch.items()}
-            loss = self.training_step(self.model, batch)
-            if loss is None:
-                raise ValueError("Training step did not return a loss tensor.")
-            self.deepspeed.step()
-            total_tokens += batch["input_ids"].numel()
+        output = super().train(**kwargs)  # Use Trainer's train method
         end_time = time.time()
+
+        # Calculate throughput
         elapsed_time = end_time - start_time
+        total_tokens = len(self.train_dataset) * self.args.per_device_train_batch_size
         tokens_per_second = total_tokens / elapsed_time
         print(f"Training tokens per GPU per second: {tokens_per_second}")
         return tokens_per_second
@@ -165,7 +139,7 @@ trainer = TokenSpeedTrainer(
     args=training_args,
     train_dataset=dataset,
     tokenizer=tokenizer,
-    custom_data_loader=data_loader
+    data_collator=None  # Use the Trainer's default data collator
 )
 
 # Run training and calculate throughput
