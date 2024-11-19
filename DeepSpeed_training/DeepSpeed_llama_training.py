@@ -82,6 +82,26 @@ class TokenSpeedTrainer(Trainer):
             return self.custom_data_loader
         return super().get_train_dataloader()
 
+    def training_step(self, model, batch):
+        """Override the training step to ensure it returns a valid loss."""
+        model.train()
+        
+        # Forward pass
+        outputs = model(**batch)
+
+        # Debug outputs
+        if outputs is None:
+            raise ValueError("Model did not return any outputs. Check the forward pass.")
+        print(f"[DEBUG] Model outputs: {outputs}")
+
+        # Extract loss
+        loss = outputs.loss
+        if loss is None:
+            raise ValueError("Loss is None. Ensure `labels` are provided and the model can compute a loss.")
+        
+        print(f"[DEBUG] Loss at step: {loss}")
+        return loss
+
     def train(self, **kwargs):
         start_time = time.time()
         total_tokens = 0
@@ -89,15 +109,15 @@ class TokenSpeedTrainer(Trainer):
             # Debug tensor devices
             for key, value in batch.items():
                 print(f"[DEBUG] Batch key: {key}, Device: {value.device}, Tensor type: {value.type()}")
-            
+
             # Ensure tensors are on the correct device before training step
             batch = {key: value.to(self.model.device, non_blocking=True) for key, value in batch.items()}
-            
+
             # Perform a training step and get loss
             loss = self.training_step(self.model, batch)
             if loss is None:
                 raise ValueError("Training step did not return a loss tensor. Please check the model and data flow.")
-            
+
             # Backpropagation
             loss.backward()
 
@@ -105,23 +125,15 @@ class TokenSpeedTrainer(Trainer):
             self.optimizer.step()
             self.lr_scheduler.step()
             self.optimizer.zero_grad()
-            
+
             # Count tokens
             total_tokens += batch["input_ids"].numel()
-        
+
         end_time = time.time()
         elapsed_time = end_time - start_time
         tokens_per_second = total_tokens / elapsed_time
         print(f"Training tokens per GPU per second: {tokens_per_second}")
         return tokens_per_second
-
-    def training_step(self, model, batch):
-        """Override the training step to ensure it returns a loss."""
-        model.train()
-        outputs = model(**batch)
-        loss = outputs.loss
-        print(f"[DEBUG] Loss at step: {loss}")
-        return loss
 
 
 # Instantiate trainer
