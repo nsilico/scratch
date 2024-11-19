@@ -1,51 +1,6 @@
-## DeepSpeed llama training
-
-```bash
-# Update and install necessary packages
-apt update && apt install -y git wget libgl1 python3-pip
-
-# Upgrade pip and install Python libraries
-pip install --upgrade pip setuptools wheel
-
-# Install PyTorch, Transformers, DeepSpeed, and other dependencies
-pip install torch torchvision torchaudio \
-    transformers \
-    deepspeed \
-    datasets \
-    accelerate \
-    tensorboard
-```
-
-
-
-```bash
-cat <<EOT > ds_config.json
-{
-    "train_micro_batch_size_per_gpu": 1,
-    "gradient_accumulation_steps": 1,
-    "zero_optimization": {
-        "stage": 2
-    },
-    "fp16": {
-        "enabled": true
-    },
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": 1e-5,
-            "betas": [0.9, 0.999],
-            "eps": 1e-8,
-            "weight_decay": 1e-2
-        }
-    }
-}
-EOT
-```
-
-```python
 import time
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForSeq2Seq
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from deepspeed import init_distributed
 from torch.utils.data import DataLoader, Dataset
 from transformers import TrainingArguments, Trainer
@@ -118,6 +73,15 @@ training_args = TrainingArguments(
 
 # Custom Trainer to track tokens per second
 class TokenSpeedTrainer(Trainer):
+    def __init__(self, *args, custom_data_loader=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.custom_data_loader = custom_data_loader
+
+    def get_train_dataloader(self):
+        if self.custom_data_loader:
+            return self.custom_data_loader
+        return super().get_train_dataloader()
+
     def train(self, **kwargs):
         start_time = time.time()
         total_tokens = 0
@@ -152,19 +116,9 @@ trainer = TokenSpeedTrainer(
     args=training_args,
     train_dataset=dataset,
     tokenizer=tokenizer,
-    data_collator=None,  # Disable default collator
-    train_dataloader=data_loader  # Use custom DataLoader
+    custom_data_loader=data_loader
 )
 
 # Run training and calculate throughput
 tokens_per_second = trainer.train()
 print(f"Figure of merit: {tokens_per_second:.2f} tokens/second per GPU")
-```
-
-```bash
-# Run
-deepspeed --num_gpus=8 train_llama2.py
-```
-
-
-
