@@ -42,10 +42,6 @@ cat <<EOT > ds_config.json
 EOT
 ```
 
-
-
-
-
 ```python
 import time
 import torch
@@ -53,7 +49,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForSeq
 from deepspeed import init_distributed
 from torch.utils.data import DataLoader, Dataset
 from transformers import TrainingArguments, Trainer
-
 
 # Initialize distributed setup for DeepSpeed
 init_distributed()
@@ -98,10 +93,12 @@ num_samples = 1000
 batch_size = 1
 dataset = RandomTextDataset(tokenizer, num_samples=num_samples)
 
-# Define data collator with explicit device placement
+# Define data collator with proper pinning and device placement
 def collate_fn_with_device(batch, device):
-    # Convert a batch (list of dicts) to a single dict with all tensors on the target device
-    collated_batch = {key: torch.stack([example[key] for example in batch]).to(device) for key in batch[0]}
+    # Pin tensors while they are still on the CPU
+    collated_batch = {key: torch.stack([example[key] for example in batch]).pin_memory() for key in batch[0]}
+    # Move tensors to the specified device after pinning
+    collated_batch = {key: value.to(device, non_blocking=True) for key, value in collated_batch.items()}
     return collated_batch
 
 # Wrap DataCollator to ensure compatibility with DeepSpeed
@@ -127,9 +124,6 @@ class TokenSpeedTrainer(Trainer):
             # Debug tensor devices
             for key, value in batch.items():
                 print(f"{key}: {value.device}")  # Debugging device mismatch
-            
-            # Move all tensors in the batch to the model's device
-            batch = {key: value.to(self.model.device) for key, value in batch.items()}
             
             # Perform a training step
             outputs = self.training_step(self.model, batch)
