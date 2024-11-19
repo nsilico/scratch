@@ -49,7 +49,7 @@ EOT
 ```python
 import time
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForSeq2Seq
 from deepspeed import init_distributed
 from torch.utils.data import DataLoader, Dataset
 from transformers import TrainingArguments, Trainer
@@ -60,7 +60,14 @@ init_distributed()
 # Load model and tokenizer
 model_name = "meta-llama/Llama-2-7b-hf"
 tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+
+# Assign a padding token (use eos_token as pad_token)
+tokenizer.pad_token = tokenizer.eos_token
+
+# Load model and set pad_token_id
 model = AutoModelForCausalLM.from_pretrained(model_name)
+if model.config.pad_token_id is None:
+    model.config.pad_token_id = tokenizer.pad_token_id
 
 # Ensure sequence length compatibility
 sequence_length = 4096
@@ -81,36 +88,19 @@ class RandomTextDataset(Dataset):
 
 # Create dataset and DataLoader
 num_samples = 1000
-batch_size = 1  # Adjust for memory constraints
+batch_size = 1
 dataset = RandomTextDataset(tokenizer, num_samples=num_samples)
-data_loader = DataLoader(dataset, batch_size=batch_size)
+
+# Define data collator for padding
+data_collator = DataCollatorForSeq2Seq(
+    tokenizer=tokenizer,
+    model=model,
+    padding=True,
+    max_length=sequence_length,
+    return_tensors="pt"
+)
 
 # Define DeepSpeed configuration
-ds_config = {
-    "train_micro_batch_size_per_gpu": batch_size,
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": 1e-5,
-            "betas": [0.9, 0.999],
-            "eps": 1e-8,
-            "weight_decay": 1e-2,
-        },
-    },
-    "fp16": {"enabled": True},
-    "zero_optimization": {
-        "stage": 2,  # ZeRO stage 2 for memory optimization
-    },
-    "gradient_accumulation_steps": 1,
-}
-
-# Save DeepSpeed config
-import json
-
-with open("./ds_config.json", "w") as f:
-    json.dump(ds_config, f)
-
-# TrainingArguments for Trainer
 training_args = TrainingArguments(
     output_dir="./output",
     overwrite_output_dir=True,
@@ -145,6 +135,7 @@ trainer = TokenSpeedTrainer(
     args=training_args,
     train_dataset=dataset,
     tokenizer=tokenizer,
+    data_collator=data_collator
 )
 
 # Run training and calculate throughput
