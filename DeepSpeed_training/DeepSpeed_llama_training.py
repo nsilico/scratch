@@ -93,9 +93,14 @@ class TokenSpeedTrainer(Trainer):
             # Ensure tensors are on the correct device before training step
             batch = {key: value.to(self.model.device, non_blocking=True) for key, value in batch.items()}
             
-            # Perform a training step
-            outputs = self.training_step(self.model, batch)
+            # Perform a training step and get loss
+            loss = self.training_step(self.model, batch)
+            if loss is None:
+                raise ValueError("Training step did not return a loss tensor. Please check the model and data flow.")
             
+            # Backpropagation
+            loss.backward()
+
             # Optimizer and scheduler step
             self.optimizer.step()
             self.lr_scheduler.step()
@@ -103,11 +108,20 @@ class TokenSpeedTrainer(Trainer):
             
             # Count tokens
             total_tokens += batch["input_ids"].numel()
+        
         end_time = time.time()
         elapsed_time = end_time - start_time
         tokens_per_second = total_tokens / elapsed_time
         print(f"Training tokens per GPU per second: {tokens_per_second}")
         return tokens_per_second
+
+    def training_step(self, model, batch):
+        """Override the training step to ensure it returns a loss."""
+        model.train()
+        outputs = model(**batch)
+        loss = outputs.loss
+        print(f"[DEBUG] Loss at step: {loss}")
+        return loss
 
 
 # Instantiate trainer
