@@ -30,6 +30,18 @@ parser.add_argument(
     default=4096, 
     help="Sequence length for the synthetic dataset"
 )
+parser.add_argument(
+    "--gradient_accumulation_steps", 
+    type=int, 
+    default=2, 
+    help="Number of steps to accumulate gradients before performing an optimizer step"
+)
+parser.add_argument(
+    "--batch_size", 
+    type=int, 
+    default=1, 
+    help="Per-device batch size for training"
+)
 try:
     args, unknown = parser.parse_known_args()
     print(f"Parsed arguments: {args}")
@@ -41,10 +53,14 @@ except SystemExit as e:
 # Generate DeepSpeed configuration
 def create_deepspeed_config():
     ds_config = {
-        "train_micro_batch_size_per_gpu": "auto",
-        "gradient_accumulation_steps": "auto",
+        "train_micro_batch_size_per_gpu": args.batch_size,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "fp16": {
-            "enabled": "auto"
+            "enabled": True,
+            "loss_scale": 0,
+            "loss_scale_window": 1000,
+            "hysteresis": 2,
+            "min_loss_scale": 1
         },
         "optimizer": {
             "type": "AdamW",
@@ -65,15 +81,14 @@ def create_deepspeed_config():
         },
         "zero_optimization": {
             "stage": 2,
-            "offload_optimizer": {
-                "device": "none"
-            },
-            "offload_param": {
-                "device": "none"
-            },
             "overlap_comm": True,
             "reduce_scatter": True,
             "contiguous_gradients": True
+        },
+        "activation_checkpointing": {
+            "partition_activations": True,
+            "contiguous_memory_optimization": True,
+            "cpu_checkpointing": False
         }
     }
     with open("ds_config.json", "w") as f:
@@ -122,7 +137,7 @@ class RandomTextDataset(Dataset):
 # Create dataset
 num_samples = args.num_samples
 sequence_length = args.sequence_length
-batch_size = 1
+batch_size = args.batch_size
 dataset = RandomTextDataset(tokenizer, num_samples=num_samples, seq_len=sequence_length)
 
 # Define data collator without pinning
@@ -145,6 +160,7 @@ training_args = TrainingArguments(
     num_train_epochs=1,
     logging_steps=10,
     save_steps=50,
+    gradient_accumulation_steps=args.gradient_accumulation_steps,
     deepspeed="./ds_config.json",
 )
 
