@@ -7,8 +7,6 @@ from deepspeed import init_distributed
 from torch.utils.data import DataLoader, Dataset
 from transformers import TrainingArguments, Trainer
 
-import argparse
-
 # Debug start
 print("Script started")
 
@@ -20,13 +18,24 @@ parser.add_argument(
     required=True, 
     help="Name of the model to load from Hugging Face (e.g., meta-llama/Llama-3.1-8B)"
 )
+parser.add_argument(
+    "--num_samples", 
+    type=int, 
+    default=1000, 
+    help="Number of synthetic samples in the dataset"
+)
+parser.add_argument(
+    "--sequence_length", 
+    type=int, 
+    default=4096, 
+    help="Sequence length for the synthetic dataset"
+)
 try:
-    # Use parse_known_args to avoid conflicts with DeepSpeed
     args, unknown = parser.parse_known_args()
     print(f"Parsed arguments: {args}")
     print(f"Unknown arguments passed to script: {unknown}")
 except SystemExit as e:
-    print("Error parsing arguments. Ensure --model_name is provided correctly.")
+    print("Error parsing arguments. Ensure arguments are provided correctly.")
     raise
     
 # Generate DeepSpeed configuration
@@ -81,6 +90,7 @@ init_distributed()
 rank = torch.distributed.get_rank()
 device = torch.device(f"cuda:{rank}")
 torch.cuda.set_device(device)
+print(f"Using GPU: {device}")
 
 # Load model and tokenizer
 model_name = args.model_name
@@ -95,12 +105,9 @@ model.to(device)  # Explicitly move the model to the correct device
 if model.config.pad_token_id is None:
     model.config.pad_token_id = tokenizer.pad_token_id
 
-# Ensure sequence length compatibility
-sequence_length = 4096
-
 # Generate synthetic dataset
 class RandomTextDataset(Dataset):
-    def __init__(self, tokenizer, num_samples=100, seq_len=sequence_length):
+    def __init__(self, tokenizer, num_samples=100, seq_len=4096):
         self.input_ids = torch.randint(
             0, tokenizer.vocab_size, (num_samples, seq_len), dtype=torch.long
         )
@@ -113,9 +120,10 @@ class RandomTextDataset(Dataset):
 
 
 # Create dataset
-num_samples = 1000
+num_samples = args.num_samples
+sequence_length = args.sequence_length
 batch_size = 1
-dataset = RandomTextDataset(tokenizer, num_samples=num_samples)
+dataset = RandomTextDataset(tokenizer, num_samples=num_samples, seq_len=sequence_length)
 
 # Define data collator without pinning
 def collate_fn_with_device(batch, device):
@@ -151,23 +159,17 @@ class TokenSpeedTrainer(Trainer):
         # Calculate throughput
         elapsed_time = end_time - start_time
         total_samples = len(self.train_dataset)  # Total samples in dataset
-        sequence_length = 4096  # Match sequence length in the script
+        sequence_length = args.sequence_length  # Use argument-defined sequence length
         batch_size = self.args.per_device_train_batch_size
-        num_gpus = torch.cuda.device_count()  # Automatically detect GPUs
 
-        # Total tokens processed
-        total_tokens = total_samples * sequence_length * batch_size
-
-        # Tokens per GPU per second
         # FIXME: this is a consequential update. I think these results are still single GPU
         # dividing by GPU is unnecessary
 
-        # Original
-        #tokens_per_second = total_tokens / (elapsed_time * num_gpus)
-
-        # Updated
+        # Total tokens processed
+        total_tokens = total_samples * sequence_length * batch_size
         tokens_per_second = total_tokens / elapsed_time
-        print(f"Training tokens per GPU per second: {tokens_per_second:.2f}")
+
+        print(f"Training tokens per second: {tokens_per_second:.2f}")
         return tokens_per_second
 
 
@@ -182,4 +184,4 @@ trainer = TokenSpeedTrainer(
 
 # Run training and calculate throughput
 tokens_per_second = trainer.train()
-print(f"Figure of merit: {tokens_per_second:.2f} tokens/second per GPU")
+print(f"Figure of merit: {tokens_per_second:.2f} tokens/second")
