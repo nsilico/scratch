@@ -13,7 +13,7 @@ import argparse
 print("Script started")
 
 # Parse command-line arguments
-parser = argparse.ArgumentParser(description="Train a Llama model with DeepSpeed")
+parser = argparse.ArgumentParser(description="Train a Hugging Face model with DeepSpeed")
 parser.add_argument(
     "--model_name", 
     type=str, 
@@ -32,26 +32,26 @@ except SystemExit as e:
 # Generate DeepSpeed configuration
 def create_deepspeed_config():
     ds_config = {
-        "train_micro_batch_size_per_gpu": "auto",  # Automatically determined
-        "gradient_accumulation_steps": "auto",  # Automatically determined
+        "train_micro_batch_size_per_gpu": "auto",
+        "gradient_accumulation_steps": "auto",
         "fp16": {
-            "enabled": "auto"  # Automatically determined
+            "enabled": "auto"
         },
         "optimizer": {
             "type": "AdamW",
             "params": {
-                "lr": "auto",  # Automatically determined
+                "lr": "auto",
                 "betas": [0.9, 0.999],
                 "eps": 1e-8,
-                "weight_decay": "auto"  # Automatically determined
+                "weight_decay": "auto"
             }
         },
         "scheduler": {
             "type": "WarmupLR",
             "params": {
                 "warmup_min_lr": 0,
-                "warmup_max_lr": "auto",  # Automatically determined
-                "warmup_num_steps": "auto"  # Automatically determined
+                "warmup_max_lr": "auto",
+                "warmup_num_steps": "auto"
             }
         },
         "zero_optimization": {
@@ -83,7 +83,7 @@ device = torch.device(f"cuda:{rank}")
 torch.cuda.set_device(device)
 
 # Load model and tokenizer
-model_name = args.model_name  # Use model name from command-line argument
+model_name = args.model_name
 tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
 
 # Assign a padding token (use eos_token as pad_token)
