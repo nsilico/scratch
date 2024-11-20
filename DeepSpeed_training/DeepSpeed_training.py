@@ -49,7 +49,7 @@ try:
 except SystemExit as e:
     print("Error parsing arguments. Ensure arguments are provided correctly.")
     raise
-    
+
 # Generate DeepSpeed configuration
 def create_deepspeed_config():
     ds_config = {
@@ -162,6 +162,7 @@ training_args = TrainingArguments(
     save_steps=50,
     gradient_accumulation_steps=args.gradient_accumulation_steps,
     deepspeed="./ds_config.json",
+    fp16=True  # Explicitly enable FP16 in TrainingArguments
 )
 
 # Custom Trainer
