@@ -6,9 +6,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from deepspeed import init_distributed
 from torch.utils.data import DataLoader, Dataset
 from transformers import TrainingArguments, Trainer
+from datetime import datetime
 
 # Debug start
-print("Script started")
+print("[LOG] Script started")
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Train a Hugging Face model with DeepSpeed")
@@ -44,10 +45,10 @@ parser.add_argument(
 )
 try:
     args, unknown = parser.parse_known_args()
-    print(f"Parsed arguments: {args}")
-    print(f"Unknown arguments passed to script: {unknown}")
+    print(f"[LOG] Parsed arguments: {args}")
+    print(f"[LOG] Unknown arguments passed to script: {unknown}")
 except SystemExit as e:
-    print("Error parsing arguments. Ensure arguments are provided correctly.")
+    print("[LOG] Error parsing arguments. Ensure arguments are provided correctly.")
     raise
 
 # Generate DeepSpeed configuration
@@ -93,7 +94,7 @@ def create_deepspeed_config():
     }
     with open("ds_config.json", "w") as f:
         json.dump(ds_config, f, indent=4)
-    print("DeepSpeed config file created as 'ds_config.json'.")
+    print("[LOG] DeepSpeed config file created as 'ds_config.json'.")
 
 # Create DeepSpeed config
 create_deepspeed_config()
@@ -105,7 +106,7 @@ init_distributed()
 rank = torch.distributed.get_rank()
 device = torch.device(f"cuda:{rank}")
 torch.cuda.set_device(device)
-print(f"Using GPU: {device}")
+print(f"[LOG] Using GPU: {device}")
 
 # Load model and tokenizer
 model_name = args.model_name
@@ -132,7 +133,6 @@ class RandomTextDataset(Dataset):
 
     def __getitem__(self, idx):
         return {"input_ids": self.input_ids[idx], "labels": self.input_ids[idx]}
-
 
 # Create dataset
 num_samples = args.num_samples
@@ -168,27 +168,31 @@ training_args = TrainingArguments(
 # Custom Trainer
 class TokenSpeedTrainer(Trainer):
     def train(self, **kwargs):
-        # Start timing
-        start_time = time.time()
-        super().train(**kwargs)  # Use Hugging Face's Trainer train method
-        end_time = time.time()
+        print("[LOG] Training started...")
+        try:
+            # Start timing
+            start_time = time.time()
+            super().train(**kwargs)  # Use Hugging Face's Trainer train method
+            end_time = time.time()
 
-        # Calculate throughput
-        elapsed_time = end_time - start_time
-        total_samples = len(self.train_dataset)  # Total samples in dataset
-        sequence_length = args.sequence_length  # Use argument-defined sequence length
-        batch_size = self.args.per_device_train_batch_size
+            # Calculate throughput
+            elapsed_time = end_time - start_time
+            total_samples = len(self.train_dataset)  # Total samples in dataset
+            sequence_length = args.sequence_length  # Use argument-defined sequence length
+            batch_size = self.args.per_device_train_batch_size
 
-        # FIXME: this is a consequential update. I think these results are still single GPU
-        # dividing by GPU is unnecessary
+            # Total tokens processed
+            total_tokens = total_samples * sequence_length * batch_size
+            tokens_per_second = total_tokens / elapsed_time
 
-        # Total tokens processed
-        total_tokens = total_samples * sequence_length * batch_size
-        tokens_per_second = total_tokens / elapsed_time
+            print(f"[LOG] Training tokens per second: {tokens_per_second:.2f}")
+            return tokens_per_second, elapsed_time
 
-        print(f"Training tokens per second: {tokens_per_second:.2f}")
-        return tokens_per_second
-
+        except Exception as e:
+            print(f"[LOG] Training failed with exception: {e}")
+            raise
+        finally:
+            print("[LOG] Training completed.")
 
 # Instantiate trainer
 trainer = TokenSpeedTrainer(
@@ -200,5 +204,22 @@ trainer = TokenSpeedTrainer(
 )
 
 # Run training and calculate throughput
-tokens_per_second = trainer.train()
-print(f"Figure of merit: {tokens_per_second:.2f} tokens/second")
+start_time = datetime.now()
+print(f"[LOG] Test started at: {start_time}")
+tokens_per_second, duration = trainer.train()
+end_time = datetime.now()
+
+# Structured Output
+print("\n" + "="*40)
+print("Summary Report")
+print("="*40)
+print(f"Test Start Time:       {start_time}")
+print(f"Test End Time:         {end_time}")
+print(f"Total Duration:        {duration:.2f} seconds")
+print(f"Model Name:            {args.model_name}")
+print(f"Batch Size:            {args.batch_size}")
+print(f"Sequence Length:       {args.sequence_length}")
+print(f"Num Samples:           {args.num_samples}")
+print(f"Gradient Accum Steps:  {args.gradient_accumulation_steps}")
+print(f"Tokens/Second:         {tokens_per_second:.2f}")
+print("="*40)
