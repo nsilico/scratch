@@ -7,21 +7,28 @@ from deepspeed import init_distributed
 from torch.utils.data import DataLoader, Dataset
 from transformers import TrainingArguments, Trainer
 
+import argparse
+
+# Debug start
+print("Script started")
+
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Train a Llama model with DeepSpeed")
 parser.add_argument(
     "--model_name", 
     type=str, 
     required=True, 
-    help="Name of the model to load from Hugging Face (e.g., meta-llama/Llama-3.1-8b-hf)"
+    help="Name of the model to load from Hugging Face (e.g., meta-llama/Llama-3.1-8B)"
 )
 try:
-    args = parser.parse_args()
-    print(f"Using model: {args.model_name}")
+    # Use parse_known_args to avoid conflicts with DeepSpeed
+    args, unknown = parser.parse_known_args()
+    print(f"Parsed arguments: {args}")
+    print(f"Unknown arguments passed to script: {unknown}")
 except SystemExit as e:
-    print("Error parsing arguments. Please provide a valid --model_name argument.")
+    print("Error parsing arguments. Ensure --model_name is provided correctly.")
     raise
-
+    
 # Generate DeepSpeed configuration
 def create_deepspeed_config():
     ds_config = {
