@@ -15,7 +15,12 @@ parser.add_argument(
     required=True, 
     help="Name of the model to load from Hugging Face (e.g., meta-llama/Llama-3.1-8b-hf)"
 )
-args = parser.parse_args()
+try:
+    args = parser.parse_args()
+    print(f"Using model: {args.model_name}")
+except SystemExit as e:
+    print("Error parsing arguments. Please provide a valid --model_name argument.")
+    raise
 
 # Generate DeepSpeed configuration
 def create_deepspeed_config():
