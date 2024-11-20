@@ -147,7 +147,14 @@ class TokenSpeedTrainer(Trainer):
         total_tokens = total_samples * sequence_length * batch_size
 
         # Tokens per GPU per second
-        tokens_per_second = total_tokens / (elapsed_time * num_gpus)
+        # FIXME: this is a consequential update. I think these results are still single GPU
+        # dividing by GPU is unnecessary
+
+        # Original
+        #tokens_per_second = total_tokens / (elapsed_time * num_gpus)
+
+        # Updated
+        tokens_per_second = total_tokens / elapsed_time
         print(f"Training tokens per GPU per second: {tokens_per_second:.2f}")
         return tokens_per_second
 
