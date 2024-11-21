@@ -16,6 +16,7 @@ rank = dist.get_rank()
 world_size = dist.get_world_size()
 device = torch.device(f"cuda:{rank % torch.cuda.device_count()}")
 torch.cuda.set_device(device)
+print(f"[LOG] Rank {rank}/{world_size} using device {device}")
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Train a Hugging Face model with DeepSpeed")
@@ -41,6 +42,7 @@ def create_deepspeed_config():
     }
     with open("ds_config.json", "w") as f:
         json.dump(ds_config, f, indent=4)
+    print("[LOG] DeepSpeed config file created as 'ds_config.json'.")
 
 create_deepspeed_config()
 
@@ -77,20 +79,29 @@ training_args = TrainingArguments(
     fp16=True,
 )
 
-# Custom data_collator (updated)
+# Custom data_collator
 def data_collator(features):
     # Do not move data to the device here
     return {k: torch.stack([f[k] for f in features]) for k in features[0]}
 
-# Custom Trainer (updated)
+# Custom Trainer
 class TokenSpeedTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.total_tokens = 0  # Initialize token counter
 
-    def training_step(self, model, inputs, **kwargs):
-        # Perform the standard training step
-        output = super().training_step(model, inputs, **kwargs)
+    def training_step(self, *args, **kwargs):
+        # Call the base class's training_step method
+        output = super().training_step(*args, **kwargs)
+
+        # Extract 'inputs' from args or kwargs
+        if len(args) >= 2:
+            # Assuming the signature is (self, model, inputs, ...)
+            inputs = args[1]
+        elif 'inputs' in kwargs:
+            inputs = kwargs['inputs']
+        else:
+            raise ValueError("Unable to find 'inputs' in training_step arguments.")
 
         # Update the total tokens processed
         batch_size = inputs['input_ids'].size(0)
