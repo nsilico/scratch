@@ -109,14 +109,14 @@ class TokenSpeedTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.local_total_samples = 0  # Track samples processed by this rank
 
-    def training_step(self, model, inputs, optimizer=None):
-        # Explicitly move inputs to GPU
+    def training_step(self, model, inputs):
+        # Ensure all inputs are moved to the GPU
         inputs = {key: value.to(device, non_blocking=True) for key, value in inputs.items()}
         
-        # Perform a standard training step
+        # Call the parent class's training_step to handle the actual computation
         output = super().training_step(model, inputs)
-
-        # Increment sample count for this rank
+        
+        # Track the number of samples processed for throughput calculation
         self.local_total_samples += inputs["input_ids"].size(0)
         return output
 
