@@ -208,21 +208,25 @@ trainer = TokenSpeedTrainer(
 
 # Run training and calculate throughput
 start_time = datetime.now()
-print(f"[LOG] Test started at: {start_time}")
+if rank == 0:
+    print(f"[LOG] Test started at: {start_time}")
+
 tokens_per_second, duration = trainer.train()
+
 end_time = datetime.now()
 
-# Structured Output
-print("\n" + "="*40)
-print("Summary Report")
-print("="*40)
-print(f"Test Start Time:       {start_time}")
-print(f"Test End Time:         {end_time}")
-print(f"Total Duration:        {duration:.2f} seconds")
-print(f"Model Name:            {args.model_name}")
-print(f"Batch Size:            {args.batch_size}")
-print(f"Sequence Length:       {args.sequence_length}")
-print(f"Num Samples:           {args.num_samples}")
-print(f"Gradient Accum Steps:  {args.gradient_accumulation_steps}")
-print(f"Tokens/Second:         {tokens_per_second:.2f}")
-print("="*40)
+# Return summary for rank0 only
+if rank == 0:
+    print("\n" + "="*40)
+    print("Summary Report")
+    print("="*40)
+    print(f"Test Start Time:       {start_time}")
+    print(f"Test End Time:         {end_time}")
+    print(f"Total Duration:        {duration:.2f} seconds")
+    print(f"Model Name:            {args.model_name}")
+    print(f"Batch Size:            {args.batch_size}")
+    print(f"Sequence Length:       {args.sequence_length}")
+    print(f"Num Samples:           {args.num_samples}")
+    print(f"Gradient Accum Steps:  {args.gradient_accumulation_steps}")
+    print(f"Tokens/Second:         {tokens_per_second:.2f}")
+    print("="*40)
