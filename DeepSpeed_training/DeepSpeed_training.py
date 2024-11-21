@@ -3,8 +3,8 @@ import json
 import torch
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from torch.utils.data import Dataset
 from transformers import TrainingArguments, Trainer
-from torch.utils.data import DataLoader, Dataset
 from datetime import datetime
 import torch.distributed as dist
 
@@ -16,7 +16,6 @@ rank = dist.get_rank()
 world_size = dist.get_world_size()
 device = torch.device(f"cuda:{rank % torch.cuda.device_count()}")
 torch.cuda.set_device(device)
-print(f"[LOG] Rank {rank}/{world_size} using device {device}")
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Train a Hugging Face model with DeepSpeed")
@@ -47,11 +46,10 @@ create_deepspeed_config()
 
 # Load model and tokenizer
 tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token = tokenizer.eos_token
 model = AutoModelForCausalLM.from_pretrained(args.model_name).to(device)
 
-# Create synthetic dataset
+# Dataset
 class RandomTextDataset(Dataset):
     def __init__(self, tokenizer, num_samples, seq_len):
         self.input_ids = torch.randint(0, tokenizer.vocab_size, (num_samples, seq_len), dtype=torch.long)
@@ -64,7 +62,7 @@ class RandomTextDataset(Dataset):
 
 dataset = RandomTextDataset(tokenizer, args.num_samples, args.sequence_length)
 
-# Define TrainingArguments
+# TrainingArguments and Trainer setup
 training_args = TrainingArguments(
     output_dir="./output",
     overwrite_output_dir=True,
@@ -76,72 +74,64 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=args.gradient_accumulation_steps,
     deepspeed="./ds_config.json",
     fp16=True,
-    dataloader_pin_memory=True,  # Pin memory for efficiency
 )
+
+# Custom data_collator (if needed)
+def data_collator(features):
+    # Move features to the correct device
+    return {k: torch.stack([f[k] for f in features]).to(device) for k in features[0]}
 
 # Custom Trainer
 class TokenSpeedTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.total_samples = 0  # Initialize sample counter
+        self.total_tokens = 0  # Initialize token counter
 
     def training_step(self, model, inputs):
         # Move inputs to the correct device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        inputs = {k: v.to(self.args.device) for k, v in inputs.items()}
 
         # Perform the standard training step
         output = super().training_step(model, inputs)
 
-        # Update the total samples processed
+        # Update the total tokens processed
         batch_size = inputs['input_ids'].size(0)
-        # Account for gradient accumulation steps
-        self.total_samples += batch_size * self.args.gradient_accumulation_steps
+        sequence_length = inputs['input_ids'].size(1)
+        tokens_in_batch = batch_size * sequence_length
+        self.total_tokens += tokens_in_batch
 
         return output
 
     def train(self, **kwargs):
-        # Ensure that the DistributedSampler is set
-        if isinstance(self.train_dataset, torch.utils.data.Dataset):
-            self.train_dataloader = None  # Force re-creation of dataloader
-        else:
-            raise ValueError("train_dataset must be a torch.utils.data.Dataset")
-
-        # Start timing
         start_time = time.time()
         super().train(**kwargs)
         end_time = time.time()
 
         elapsed_time = end_time - start_time
 
-        # Total tokens processed by this rank
-        local_total_tokens = self.total_samples * args.sequence_length
+        # Compute tokens per GPU per second
+        tokens_per_second_rank = self.total_tokens / elapsed_time
 
-        # Throughput for this rank
-        tokens_per_second_rank = local_total_tokens / elapsed_time
-
-        # Aggregate total tokens across all ranks
-        total_tokens_tensor = torch.tensor(local_total_tokens).to(device)
+        # Aggregate tokens across all GPUs
+        total_tokens_tensor = torch.tensor(self.total_tokens).to(self.args.device)
         dist.all_reduce(total_tokens_tensor, op=dist.ReduceOp.SUM)
-        global_total_tokens = total_tokens_tensor.item()
+        total_tokens = total_tokens_tensor.item()
 
-        # Global throughput
-        tokens_per_second_global = global_total_tokens / elapsed_time
-
-        # Average tokens per GPU per second
-        avg_tokens_per_gpu = tokens_per_second_global / world_size
+        # Compute total tokens per second
+        tokens_per_second_global = total_tokens / elapsed_time
 
         if rank == 0:
             print(f"[LOG] Global Throughput: {tokens_per_second_global:.2f} tokens/second")
-            print(f"[LOG] Average Tokens/GPU/Second: {avg_tokens_per_gpu:.2f}")
+            print(f"[LOG] Tokens/GPU/Second: {tokens_per_second_rank:.2f}")
 
         return tokens_per_second_rank, tokens_per_second_global
 
-# Instantiate the Trainer
 trainer = TokenSpeedTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
     tokenizer=tokenizer,
+    data_collator=data_collator,  # Pass custom data collator if needed
 )
 
 # Start test
@@ -155,13 +145,11 @@ if rank == 0:
     print("\n" + "="*40)
     print("Summary Report")
     print("="*40)
-    print(f"Model Name:             {args.model_name}")
-    print(f"Batch Size per GPU:     {args.batch_size}")
-    print(f"Gradient Accum Steps:   {args.gradient_accumulation_steps}")
-    print(f"Effective Batch Size:   {args.batch_size * args.gradient_accumulation_steps}")
-    print(f"Sequence Length:        {args.sequence_length}")
-    print(f"Num Samples:            {args.num_samples}")
-    print(f"Total GPUs:             {world_size}")
-    print(f"Global Throughput:      {tokens_per_second_global:.2f} tokens/second")
-    print(f"Average Tokens/GPU/Sec: {tokens_per_second_global / world_size:.2f}")
+    print(f"Model Name:            {args.model_name}")
+    print(f"Batch Size:            {args.batch_size}")
+    print(f"Sequence Length:       {args.sequence_length}")
+    print(f"Num Samples:           {args.num_samples}")
+    print(f"Gradient Accum Steps:  {args.gradient_accumulation_steps}")
+    print(f"Tokens/GPU/Second:     {tokens_per_second_rank:.2f}")
+    print(f"Global Throughput:     {tokens_per_second_global:.2f}")
     print("="*40)
