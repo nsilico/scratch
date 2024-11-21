@@ -88,12 +88,9 @@ class TokenSpeedTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.total_tokens = 0  # Initialize token counter
 
-    def training_step(self, model, inputs):
-        # No need to move inputs to the device; Trainer will handle it
-        # inputs = {k: v.to(self.args.device) for k, v in inputs.items()}  # Removed
-
+    def training_step(self, model, inputs, **kwargs):
         # Perform the standard training step
-        output = super().training_step(model, inputs)
+        output = super().training_step(model, inputs, **kwargs)
 
         # Update the total tokens processed
         batch_size = inputs['input_ids'].size(0)
