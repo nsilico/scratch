@@ -7,6 +7,7 @@ from deepspeed import init_distributed
 from torch.utils.data import DataLoader, Dataset
 from transformers import TrainingArguments, Trainer
 from datetime import datetime
+import torch.distributed as dist
 
 # Debug start
 print("[LOG] Script started")
@@ -17,7 +18,7 @@ parser.add_argument(
     "--model_name", 
     type=str, 
     required=True, 
-    help="Name of the model to load from Hugging Face (e.g., meta-llama/Llama-3.1-8B)"
+    help="Name of the model to load from Hugging Face (e.g., 'gpt2')"
 )
 parser.add_argument(
     "--num_samples", 
@@ -28,13 +29,13 @@ parser.add_argument(
 parser.add_argument(
     "--sequence_length", 
     type=int, 
-    default=4096, 
+    default=1024, 
     help="Sequence length for the synthetic dataset"
 )
 parser.add_argument(
     "--gradient_accumulation_steps", 
     type=int, 
-    default=1,  # Default to 1 for no accumulation
+    default=1, 
     help="Number of steps to accumulate gradients before performing an optimizer step"
 )
 parser.add_argument(
@@ -104,17 +105,20 @@ init_distributed()
 
 # Determine the current rank and assign the corresponding GPU
 rank = torch.distributed.get_rank()
-device = torch.device(f"cuda:{rank}")
+world_size = torch.distributed.get_world_size()
+device = torch.device(f"cuda:{rank % torch.cuda.device_count()}")
 torch.cuda.set_device(device)
 if rank == 0:
     print(f"[LOG] Using GPU: {device} on rank 0")
+print(f"[LOG] Rank {rank}/{world_size} initialized.")
 
 # Load model and tokenizer
 model_name = args.model_name
 tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
 
 # Assign a padding token (use eos_token as pad_token)
-tokenizer.pad_token = tokenizer.eos_token
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 
 # Load model and set pad_token_id
 model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -124,9 +128,9 @@ if model.config.pad_token_id is None:
 
 # Generate synthetic dataset
 class RandomTextDataset(Dataset):
-    def __init__(self, tokenizer, num_samples=100, seq_len=4096):
+    def __init__(self, tokenizer, num_samples=100, seq_len=1024):
         self.input_ids = torch.randint(
-            0, tokenizer.vocab_size, (num_samples, seq_len), dtype=torch.long
+            low=0, high=tokenizer.vocab_size, size=(num_samples, seq_len), dtype=torch.long
         )
 
     def __len__(self):
@@ -141,8 +145,12 @@ sequence_length = args.sequence_length
 batch_size = args.batch_size
 dataset = RandomTextDataset(tokenizer, num_samples=num_samples, seq_len=sequence_length)
 
-# Define data collator without pinning
-def collate_fn_with_device(batch, device):
+# Use a DistributedSampler to ensure each rank gets a different subset of data
+from torch.utils.data.distributed import DistributedSampler
+sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
+
+# Define data collator
+def collate_fn_with_device(batch):
     collated_batch = {key: torch.stack([example[key] for example in batch]).to(device, non_blocking=True) for key in batch[0]}
     return collated_batch
 
@@ -150,9 +158,10 @@ def collate_fn_with_device(batch, device):
 data_loader = DataLoader(
     dataset,
     batch_size=batch_size,
-    collate_fn=lambda batch: collate_fn_with_device(batch, device),
-    num_workers=4,  # Increase worker count for prefetching
-    pin_memory=True  # Speeds up host-to-device transfers
+    sampler=sampler,
+    collate_fn=collate_fn_with_device,
+    num_workers=4,
+    pin_memory=True
 )
 
 # Define DeepSpeed configuration
@@ -161,55 +170,84 @@ training_args = TrainingArguments(
     overwrite_output_dir=True,
     per_device_train_batch_size=batch_size,
     num_train_epochs=1,
-    logging_steps=50,  # Keep lightweight logging enabled
-    save_steps=1000000,  # Disable checkpoint saving
-    save_total_limit=0,  # Do not save any checkpoints
+    logging_steps=50,
+    save_steps=1000000,
+    save_total_limit=0,
     gradient_accumulation_steps=args.gradient_accumulation_steps,
     deepspeed="./ds_config.json",
-    fp16=True  # Explicitly enable FP16 in TrainingArguments
+    fp16=True
 )
 
 # Custom Trainer
 class TokenSpeedTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.total_samples = 0  # Initialize sample counter
+
+    def training_step(self, model, inputs):
+        # Perform the standard training step
+        output = super().training_step(model, inputs)
+
+        # Update the total samples processed
+        batch_size = inputs['input_ids'].size(0)
+        self.total_samples += batch_size
+
+        return output
+
     def train(self, **kwargs):
         try:
             # Start timing
             start_time = time.time()
-            super().train(**kwargs)  # Use Hugging Face's Trainer train method
+            super().train(**kwargs)
             end_time = time.time()
 
             # Calculate throughput
             elapsed_time = end_time - start_time
-            total_samples = len(self.train_dataset)  # Total samples in dataset
-            sequence_length = args.sequence_length  # Use argument-defined sequence length
-            batch_size = self.args.per_device_train_batch_size
 
-            # Total tokens processed
-            total_tokens = total_samples * sequence_length * batch_size
-            tokens_per_second = total_tokens / elapsed_time
+            # Total tokens processed per rank
+            sequence_length = args.sequence_length
+            local_total_tokens = self.total_samples * sequence_length
 
             # Each rank reports its own throughput
+            tokens_per_second = local_total_tokens / elapsed_time
             print(f"[RANK {rank}] Tokens per second: {tokens_per_second:.2f}")
-            return tokens_per_second, elapsed_time
+
+            # Aggregate tokens across all ranks
+            total_tokens_tensor = torch.tensor(local_total_tokens).to(device)
+            dist.all_reduce(total_tokens_tensor, op=dist.ReduceOp.SUM)
+            global_total_tokens = total_tokens_tensor.item()
+
+            # Compute total tokens per second
+            total_tokens_per_second = global_total_tokens / elapsed_time
+
+            # Compute average tokens per GPU per second
+            avg_tokens_per_gpu_per_second = total_tokens_per_second / world_size
+
+            if rank == 0:
+                print(f"[LOG] Total Tokens/Second: {total_tokens_per_second:.2f}")
+                print(f"[LOG] Average Tokens/GPU/Second: {avg_tokens_per_gpu_per_second:.2f}")
+
+            return tokens_per_second, elapsed_time, total_tokens_per_second, avg_tokens_per_gpu_per_second
 
         except Exception as e:
             print(f"[RANK {rank}] Training failed with exception: {e}")
             raise
 
-# Instantiate trainer with no evaluation dataset
+# Instantiate trainer with the custom data loader
 trainer = TokenSpeedTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
     tokenizer=tokenizer,
-    data_collator=None  # Use the Trainer's default data collator
+    data_collator=collate_fn_with_device,
+    data_loader=data_loader
 )
 
 # Start test
 if rank == 0:
     print(f"[LOG] Test started at: {datetime.now()}")
 
-tokens_per_second, duration = trainer.train()
+tokens_per_second, duration, total_tokens_per_second, avg_tokens_per_gpu_per_second = trainer.train()
 
 # Gather and print metrics
 if rank == 0:
@@ -221,5 +259,7 @@ if rank == 0:
     print(f"Sequence Length:       {args.sequence_length}")
     print(f"Num Samples:           {args.num_samples}")
     print(f"Gradient Accum Steps:  {args.gradient_accumulation_steps}")
-    print(f"Tokens/GPU/Second:     {tokens_per_second:.2f} (RANK 0)")
+    print(f"Total GPUs:            {world_size}")
+    print(f"Total Tokens/Second:   {total_tokens_per_second:.2f}")
+    print(f"Tokens/GPU/Second:     {avg_tokens_per_gpu_per_second:.2f}")
     print("="*40)
