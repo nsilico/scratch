@@ -46,7 +46,8 @@ create_deepspeed_config()
 
 # Load model and tokenizer
 tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
-tokenizer.pad_token = tokenizer.eos_token
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 model = AutoModelForCausalLM.from_pretrained(args.model_name).to(device)
 
 # Dataset
@@ -76,20 +77,20 @@ training_args = TrainingArguments(
     fp16=True,
 )
 
-# Custom data_collator (if needed)
+# Custom data_collator (updated)
 def data_collator(features):
-    # Move features to the correct device
-    return {k: torch.stack([f[k] for f in features]).to(device) for k in features[0]}
+    # Do not move data to the device here
+    return {k: torch.stack([f[k] for f in features]) for k in features[0]}
 
-# Custom Trainer
+# Custom Trainer (updated)
 class TokenSpeedTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.total_tokens = 0  # Initialize token counter
 
     def training_step(self, model, inputs):
-        # Move inputs to the correct device
-        inputs = {k: v.to(self.args.device) for k, v in inputs.items()}
+        # No need to move inputs to the device; Trainer will handle it
+        # inputs = {k: v.to(self.args.device) for k, v in inputs.items()}  # Removed
 
         # Perform the standard training step
         output = super().training_step(model, inputs)
@@ -131,7 +132,7 @@ trainer = TokenSpeedTrainer(
     args=training_args,
     train_dataset=dataset,
     tokenizer=tokenizer,
-    data_collator=data_collator,  # Pass custom data collator if needed
+    data_collator=data_collator,  # Pass custom data collator
 )
 
 # Start test
