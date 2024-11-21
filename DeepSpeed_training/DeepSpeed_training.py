@@ -109,6 +109,9 @@ class TokenSpeedTrainer(Trainer):
         self.local_total_samples = 0  # Track samples processed by this rank
 
     def training_step(self, model, inputs):
+        # Explicitly move inputs to GPU
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+        
         # Perform a standard training step
         output = super().training_step(model, inputs)
 
