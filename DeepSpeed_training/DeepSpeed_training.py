@@ -86,17 +86,20 @@ sequence_length = args.sequence_length
 dataset = RandomTextDataset(AutoTokenizer.from_pretrained(args.model_name), num_samples=num_samples, seq_len=sequence_length)
 sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
 
-# DataLoader with DistributedSampler
+# Define data collator without pinning GPU tensors
+def collate_fn_with_device(batch):
+    return {
+        key: torch.stack([example[key] for example in batch]).to(device, non_blocking=True)
+        for key in batch[0]
+    }
+
+# DataLoader with DistributedSampler (no pin_memory)
 data_loader = DataLoader(
     dataset,
     batch_size=args.batch_size,
     sampler=sampler,
-    collate_fn=lambda batch: {
-        key: torch.stack([example[key] for example in batch]).to(device, non_blocking=True)
-        for key in batch[0]
-    },
-    num_workers=4,
-    pin_memory=True
+    collate_fn=collate_fn_with_device,
+    num_workers=4  # Keep worker count for parallel data loading
 )
 
 # Custom Trainer to Track Tokens
@@ -163,10 +166,7 @@ trainer = TokenSpeedTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
-    data_collator=lambda batch: {
-        key: torch.stack([example[key] for example in batch]).to(device, non_blocking=True)
-        for key in batch[0]
-    }
+    data_collator=collate_fn_with_device
 )
 
 # Start Training
