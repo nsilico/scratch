@@ -150,6 +150,8 @@ data_loader = DataLoader(
     dataset,
     batch_size=batch_size,
     collate_fn=lambda batch: collate_fn_with_device(batch, device),
+    num_workers=4,  # Increase worker count for prefetching
+    pin_memory=True  # Speeds up host-to-device transfers
 )
 
 # Define DeepSpeed configuration
@@ -158,8 +160,9 @@ training_args = TrainingArguments(
     overwrite_output_dir=True,
     per_device_train_batch_size=batch_size,
     num_train_epochs=1,
-    logging_steps=10,
-    save_steps=50,
+    logging_steps=50,  # Keep lightweight logging enabled
+    save_steps=1000000,  # Disable checkpoint saving
+    save_total_limit=0,  # Do not save any checkpoints
     gradient_accumulation_steps=args.gradient_accumulation_steps,
     deepspeed="./ds_config.json",
     fp16=True  # Explicitly enable FP16 in TrainingArguments
@@ -194,7 +197,7 @@ class TokenSpeedTrainer(Trainer):
         finally:
             print("[LOG] Training completed.")
 
-# Instantiate trainer
+# Instantiate trainer with no evaluation dataset
 trainer = TokenSpeedTrainer(
     model=model,
     args=training_args,
