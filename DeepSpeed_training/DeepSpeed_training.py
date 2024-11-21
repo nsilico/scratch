@@ -34,7 +34,7 @@ parser.add_argument(
 parser.add_argument(
     "--gradient_accumulation_steps", 
     type=int, 
-    default=2, 
+    default=1,  # Default to 1 for no accumulation
     help="Number of steps to accumulate gradients before performing an optimizer step"
 )
 parser.add_argument(
@@ -106,7 +106,8 @@ init_distributed()
 rank = torch.distributed.get_rank()
 device = torch.device(f"cuda:{rank}")
 torch.cuda.set_device(device)
-print(f"[LOG] Using GPU: {device}")
+if rank == 0:
+    print(f"[LOG] Using GPU: {device} on rank 0")
 
 # Load model and tokenizer
 model_name = args.model_name
@@ -171,7 +172,6 @@ training_args = TrainingArguments(
 # Custom Trainer
 class TokenSpeedTrainer(Trainer):
     def train(self, **kwargs):
-        print("[LOG] Training started...")
         try:
             # Start timing
             start_time = time.time()
@@ -188,14 +188,13 @@ class TokenSpeedTrainer(Trainer):
             total_tokens = total_samples * sequence_length * batch_size
             tokens_per_second = total_tokens / elapsed_time
 
-            print(f"[LOG] Training tokens per second: {tokens_per_second:.2f}")
+            # Each rank reports its own throughput
+            print(f"[RANK {rank}] Tokens per second: {tokens_per_second:.2f}")
             return tokens_per_second, elapsed_time
 
         except Exception as e:
-            print(f"[LOG] Training failed with exception: {e}")
+            print(f"[RANK {rank}] Training failed with exception: {e}")
             raise
-        finally:
-            print("[LOG] Training completed.")
 
 # Instantiate trainer with no evaluation dataset
 trainer = TokenSpeedTrainer(
@@ -206,27 +205,21 @@ trainer = TokenSpeedTrainer(
     data_collator=None  # Use the Trainer's default data collator
 )
 
-# Run training and calculate throughput
-start_time = datetime.now()
+# Start test
 if rank == 0:
-    print(f"[LOG] Test started at: {start_time}")
+    print(f"[LOG] Test started at: {datetime.now()}")
 
 tokens_per_second, duration = trainer.train()
 
-end_time = datetime.now()
-
-# Return summary for rank0 only
+# Gather and print metrics
 if rank == 0:
     print("\n" + "="*40)
     print("Summary Report")
     print("="*40)
-    print(f"Test Start Time:       {start_time}")
-    print(f"Test End Time:         {end_time}")
-    print(f"Total Duration:        {duration:.2f} seconds")
     print(f"Model Name:            {args.model_name}")
     print(f"Batch Size:            {args.batch_size}")
     print(f"Sequence Length:       {args.sequence_length}")
     print(f"Num Samples:           {args.num_samples}")
     print(f"Gradient Accum Steps:  {args.gradient_accumulation_steps}")
-    print(f"Tokens/Second:         {tokens_per_second:.2f}")
+    print(f"Tokens/GPU/Second:     {tokens_per_second:.2f} (RANK 0)")
     print("="*40)
