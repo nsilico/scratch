@@ -77,7 +77,11 @@ class RandomTextDataset(Dataset):
         return len(self.input_ids)
 
     def __getitem__(self, idx):
-        return {"input_ids": self.input_ids[idx], "labels": self.input_ids[idx]}
+        # Ensure data remains on CPU at this stage
+        return {
+            "input_ids": self.input_ids[idx].cpu(),  # Explicitly ensure on CPU
+            "labels": self.input_ids[idx].cpu(),
+        }
 
 # DistributedSampler ensures each rank processes different parts of the dataset
 from torch.utils.data.distributed import DistributedSampler
@@ -86,19 +90,16 @@ sequence_length = args.sequence_length
 dataset = RandomTextDataset(AutoTokenizer.from_pretrained(args.model_name), num_samples=num_samples, seq_len=sequence_length)
 sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
 
-# Define data collator without pinning GPU tensors
-def collate_fn_with_device(batch):
-    return {
-        key: torch.stack([example[key] for example in batch]).to(device, non_blocking=True)
-        for key in batch[0]
-    }
+# Define data collator for CPU tensors (explicitly avoid GPU tensors here)
+def collate_fn_with_cpu(batch):
+    return {key: torch.stack([example[key] for example in batch]) for key in batch[0]}
 
-# DataLoader with DistributedSampler (no pin_memory)
+# DataLoader with DistributedSampler (CPU tensors only)
 data_loader = DataLoader(
     dataset,
     batch_size=args.batch_size,
     sampler=sampler,
-    collate_fn=collate_fn_with_device,
+    collate_fn=collate_fn_with_cpu,
     num_workers=4  # Keep worker count for parallel data loading
 )
 
@@ -110,7 +111,7 @@ class TokenSpeedTrainer(Trainer):
 
     def training_step(self, model, inputs):
         # Explicitly move inputs to GPU
-        inputs = {key: value.to(device) for key, value in inputs.items()}
+        inputs = {key: value.to(device, non_blocking=True) for key, value in inputs.items()}
         
         # Perform a standard training step
         output = super().training_step(model, inputs)
@@ -169,7 +170,7 @@ trainer = TokenSpeedTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
-    data_collator=collate_fn_with_device
+    data_collator=collate_fn_with_cpu
 )
 
 # Start Training
