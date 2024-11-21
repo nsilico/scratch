@@ -104,8 +104,8 @@ create_deepspeed_config()
 init_distributed()
 
 # Determine the current rank and assign the corresponding GPU
-rank = torch.distributed.get_rank()
-world_size = torch.distributed.get_world_size()
+rank = dist.get_rank()
+world_size = dist.get_world_size()
 device = torch.device(f"cuda:{rank % torch.cuda.device_count()}")
 torch.cuda.set_device(device)
 if rank == 0:
@@ -180,9 +180,16 @@ training_args = TrainingArguments(
 
 # Custom Trainer
 class TokenSpeedTrainer(Trainer):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, data_loader=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.data_loader = data_loader
         self.total_samples = 0  # Initialize sample counter
+
+    def get_train_dataloader(self):
+        if self.data_loader is not None:
+            return self.data_loader
+        else:
+            return super().get_train_dataloader()
 
     def training_step(self, model, inputs):
         # Perform the standard training step
@@ -240,7 +247,7 @@ trainer = TokenSpeedTrainer(
     train_dataset=dataset,
     tokenizer=tokenizer,
     data_collator=collate_fn_with_device,
-    data_loader=data_loader
+    data_loader=data_loader  # Pass it to our custom trainer
 )
 
 # Start test
